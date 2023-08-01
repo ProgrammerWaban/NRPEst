@@ -8,33 +8,33 @@ object DistributedDegreeEstimation {
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf().setAppName("DistributedDegreeEstimation")
     val sc = new SparkContext(sparkConf)
-    //参数
+    //Parameters.
     val filePath = args(0)
     val outputPath = args(1)
     val samplingRatio = args(2).toDouble
     val N = args(3).toLong
-    //读取文件夹里的文件列表
+    //Read data.
     val NRPs: List[String] = Util.getFiles(sc, filePath)
-    //抽样块
+    //Sample NRPs.
     val NRPSample: List[String] = Util.sample(NRPs, samplingRatio)
     val Gs: RDD[String] = sc.textFile(NRPSample.mkString(","))
-    //抽样块的点的数量
+    //Calculate the number of vertices.
     val Ns: Long = Gs.count()
-    //计算每个点的度
+    //Calculate the degree of each vertices.
     val Fdeg: RDD[(Int, Int)] = Gs.map(line => {
       val L = line.split(",")
       (L.length, 1)
     })
-    //计算度分布
+    //Calculate the degree distribution.
     Fdeg.reduceByKey(_ + _).sortBy(_._1).saveAsTextFile(outputPath + "/deg")
-    //计算平均度
+    //Calculate the average degree.
     val sumDegree = Fdeg.map(_._1).reduce(_ + _)
     val avgDegree = sumDegree.toDouble / Ns
     println("avgDegree=" + avgDegree)
-    //计算图密度
+    //Calculate the graph density.
     val graphDensity = avgDegree / (N - 1)
     println("graphDensity=" + graphDensity)
-    //计算幂律指数
+    //Calculate the power law exponent.
     val minDeg = Fdeg.map(_._1).filter(_ != 0).min()
     val avgLogDeg = Fdeg.map(d => Math.log(d._1)).mean()
     val ple = 1 / (avgLogDeg - Math.log(minDeg)) + 1
