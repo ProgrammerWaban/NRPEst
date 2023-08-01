@@ -37,7 +37,7 @@ object Util {
   }
 
   def calTriangle(graph: Graph[(Int, Array[Long]), None.type], graphType: Int): RDD[(Long, (Long, Long))] = {
-    //Count the number of triangles of per vertex in Vs.
+    //Count the number of triangles of per vertex in V_s.
     val counters: VertexRDD[(Long, Long)] = graph.aggregateMessages[(Long, Long)](ctx => {
       val n1 = ctx.srcAttr._2
       val n2 = ctx.dstAttr._2
@@ -64,13 +64,13 @@ object Util {
 
   def findVaddData(ss: SparkSession, VB: RDD[Long], filePath: String, VPath: String): RDD[String] = {
     import ss.implicits._
-    //Find vertices in V_{neighbors} from NRPs not loaded.
-    //1.Read the data block contained vertices in V_{neighbors}.
+    //Find vertices in V_{neighbor} from NRPs not loaded.
+    //1.Read the data block contained vertices in V_{neighbor}.
     val blockNo: Column = substring_index(input_file_name(), "/", -1)
     val VNRPs: DataFrame = ss.read.text(VPath).withColumn("blockNo", blockNo)
     val frame: DataFrame = VB.toDF("id").join(VNRPs, col("id").cast("long") === col("value").cast("long"))
     val blockNames: Array[String] = frame.select("blockNo").distinct().rdd.map(filePath + "/" + _.getString(0)).collect()
-    //2.From the read NRP, find the linked lists of vertices in V_{neighbors}.
+    //2.From the read NRP, find the linked lists of vertices in V_{neighbor}.
     val block: RDD[String] = ss.sparkContext.textFile(blockNames.mkString(","))
     block
   }
