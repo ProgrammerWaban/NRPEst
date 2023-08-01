@@ -34,6 +34,11 @@ object DistributedDegreeEstimation {
     //计算图密度
     val graphDensity = avgDegree / (N - 1)
     println("graphDensity=" + graphDensity)
+    //计算幂律指数
+    val minDeg = Fdeg.map(_._1).filter(_ != 0).min()
+    val avgLogDeg = Fdeg.map(d => Math.log(d._1)).mean()
+    val ple = 1 / (avgLogDeg - Math.log(minDeg)) + 1
+    println("PowerLawExponent=" + ple)
 
     sc.stop()
   }
