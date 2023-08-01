@@ -50,7 +50,6 @@
                             <goal>compile</goal>
                         </goals>
                         <configuration>
-                            <!--includes是一个数组，包含要编译的code-->
                             <includes>
                                 <include>**/*.scala</include>
                             </includes>
