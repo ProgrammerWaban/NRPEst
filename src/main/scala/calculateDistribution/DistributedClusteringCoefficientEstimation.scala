@@ -46,32 +46,29 @@ object DistributedClusteringCoefficientEstimation {
       })
       V2 = VB.map(d => (d, 2)).leftOuterJoin(blockData).map(d => (d._1, (d._2._1, d._2._2.head)))
     }
-
-    //Vα和Vβ的邻接链的并集
     val V: RDD[(Long, (Int, Array[Long]))] = V1.union(V2)
     val VRDD: RDD[(Long, (Int, Array[Long]))] = V.repartition(V.getNumPartitions * numPartitionsMultiplier)
     val E: RDD[Edge[None.type]] = ES.map(d => new Edge(d._1, d._2, None))
     val ERDD: RDD[Edge[None.type]] = E.repartition(E.getNumPartitions * numPartitionsMultiplier)
-    //用GraphX构建图
+    //Building graphs using GraphX
     val newGraph: Graph[(Int, Array[Long]), None.type] = Graph.apply(VRDD, ERDD, (2, Array(-1)), storageLevel, storageLevel)
-    //通过每条边计算Vα每个顶点的三角形数量和度
+    //Calculate the number and degree and triangles for each vertex in V_s.
     val counters: RDD[(Long, (Long, Long))] = Util.calTriangle(newGraph, GraphType.UNDIRECTED)
-    //计算聚类系数
+    //Calculate the clustering coefficients.
     val cc: RDD[(Long, Double)] = counters.map {
       case (id, (tri, d)) =>
         if (d >= 2) (id, 1.0 * tri / d / (d - 1)) //这里不用×2，因为tri（三角数量）已经是实际数量的2倍
         else  (id, 0.0)
     }
-    //计算聚类系数分布
+    //Calculate the clustering coefficient distribution.
     val ccd: RDD[(Double, Int)] = cc.map(d => (d._2, 1)).reduceByKey(_ + _)
-    //保存聚类系数分布
     ccd.saveAsTextFile(outputPath + "/ccd")
-    //计算平均聚类系数
+    //Calculate the average clustering coefficient.
     val numsOfNode = cc.count()
     val ccSum = cc.map(_._2).reduce(_ + _)
     val acc = ccSum / numsOfNode
     println("acc:" + acc)
-    //计算全局聚类系数
+    //Calculate the local clustering coefficient.
     val numerator = counters.map(_._2._1).sum() / 2
     val denominator = counters.map(d => d._2._2 * (d._2._2 - 1) / 2.0).sum()
     val gcc = {
