@@ -25,7 +25,7 @@ object DistributedShorestPath {
     val storageLevel = GetStorageLevel.getStorageLevel(args(4).toInt)
 
     //Sample NRPs.
-    //Read data.
+    //Load data.
     val NRPs: List[String] = Util.getFiles(sc, filePath)
     val NRPSample: List[String] = Util.sample(NRPs, samplingRatio)
     var T: RDD[(Int, Long)] = sc.emptyRDD
