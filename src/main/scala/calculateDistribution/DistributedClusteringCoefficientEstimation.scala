@@ -11,34 +11,31 @@ object DistributedClusteringCoefficientEstimation {
     val sparkConf: SparkConf = new SparkConf().setAppName("DistributedClusteringCoefficientEstimation")
     val ss = new SparkSession.Builder().config(sparkConf).getOrCreate()
     val sc = ss.sparkContext
-    //参数
+    //Parameters
     val filePath = args(0)
     val VPath = args(1)
     val outputPath = args(2)
     val samplingRatio = args(3).toDouble
     val numPartitionsMultiplier = args(4).toInt
     val storageLevel = GetStorageLevel.getStorageLevel(args(5).toInt)
-    //抽样NRPs
+    //Sample NRPs
     val AFile: RDD[String] = Util.sampleNRPs(sc, filePath, samplingRatio)
-    //处理VA的邻接链
+    //Processing the linked list of V_s
     val V1: RDD[(Long, (Int, Array[Long]))] = AFile.map(line => {
       val L = line.split(":")
       val neighbors = L(1).split(",").map(_.split("_")(0).toLong)
       (L(0).toLong, (1, neighbors))
     })
-    //抽样块数据的 点集VA
     val VA: RDD[Long] = V1.map(_._1)
-    //点集VA的关联边ES
     var ES: RDD[(Long, Long)] = V1.flatMap(line => {
       val neighbors = line._2._2
       val edges = neighbors.map(e => (line._1, e))
       edges
     })
-    //关联边ES去重
+    //E_s de-duplication
     ES = Util.edgesDistinct(ES)
-    //关联边的点集VB(也就是VA的邻居)，不包含VA
+    //Removing vertices in V_s from V_{neighbor}
     val VB: RDD[Long] = ES.flatMap(d => Array(d._1, d._2)).distinct().subtract(VA)
-
     var V2: RDD[(Long, (Int, Array[Long]))] = sc.emptyRDD
     if (VB.count() != 0) {
       val block: RDD[String] = Util.findVaddData(ss, VB, filePath, VPath)
