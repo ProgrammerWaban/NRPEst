@@ -17,42 +17,36 @@ object DistributedShorestPath {
     val sc = ss.sparkContext
     import ss.implicits._
 
-    //参数
+    //Parameters.
     val filePath = args(0)
     val VPath = args(1)
     val samplingRatio = args(2).toDouble
     val numPartitionsMultiplier = args(3).toInt
     val storageLevel = GetStorageLevel.getStorageLevel(args(4).toInt)
 
-    //抽样NRPs
-    //读取文件夹里的文件列表
+    //Sample NRPs.
+    //Read data.
     val NRPs: List[String] = Util.getFiles(sc, filePath)
-    //抽样NRPs的文件列表
     val NRPSample: List[String] = Util.sample(NRPs, samplingRatio)
-
     var T: RDD[(Int, Long)] = sc.emptyRDD
 
-    //对每个NRP子图计算最短路径
+    //Compute shortest paths for subgraphs
     for (i <- NRPSample.indices) {
-      //读取一个NRP
+      //Load an NRP.
       val A: RDD[String] = sc.textFile(NRPSample(i))
-      //点集V
       val V: RDD[Long] = A.map(_.split(":")(0).toLong)
       val VGlobal: Array[Long] = V.collect()
-      //m = VGlobal.length
-      //点集Vneighbor
       val Vneighbor: RDD[Long] = A.flatMap(line => {
         val s = line.split(":")
         val Vall = s(1).split(",").map(_.split("_")(0).toLong)
         Vall
       }).distinct().subtract(V)
-      //V的关联边E
       val E: RDD[(Long, Long)] = A.flatMap(line => {
         val s = line.split(":")
         val node = s(0).toLong
         s(1).split(",").map(d => (Math.min(node, d.split("_")(0).toLong), Math.max(node, d.split("_")(0).toLong)))
       }).distinct()
-      //找Vneighbor之间的边
+      //Add edges between V_{neighbor}.
       var VneighborEdges: RDD[(Long, Long)] = sc.emptyRDD
       if (Vneighbor.count() > 0) {
         val block: RDD[String] = Util.findVaddData(ss, Vneighbor, filePath, VPath)
@@ -77,24 +71,20 @@ object DistributedShorestPath {
             else  true
         }.map(d => (d._1, d._2))
       }
-      //构成图去计算最短路径
-      //点
+      //Construct subgraph.
       val newV = V.union(Vneighbor).map((_, 1))
       val newVRDD = newV.repartition(newV.getNumPartitions * numPartitionsMultiplier)
-      //边
       val newE = E.union(VneighborEdges).flatMap(d => Array(new Edge(d._1, d._2, None), new Edge(d._2, d._1, None)))
       val newERDD = newE.repartition(newE.getNumPartitions * numPartitionsMultiplier)
-      //图
       val graph: Graph[Int, None.type] = Graph.apply(newVRDD, newERDD, 1, storageLevel, storageLevel)
-      //找最大的连通分量
+      //Find the largest connected component
       val ccGraph: Graph[VertexId, None.type] = graph.connectedComponents()
       val largestComponent: (Int, VertexId) = ccGraph.vertices.map(v => (v._2, 1)).reduceByKey(_ + _).map(_.swap).max()
       val largeCCGraph: Graph[VertexId, None.type] = ccGraph.subgraph(vpred = (v, d) => d == largestComponent._2)
       val ccVGlobal: Array[VertexId] = largeCCGraph.vertices.filter(v => VGlobal.contains(v._1)).map(_._1).collect()
-      //计算最短路径
+      //Calculate the shortest path。
       val sp: Graph[SPMap, None.type] = ShortestPaths.run(largeCCGraph, ccVGlobal)
       val Ti: RDD[(Int, Long)] = sp.vertices.filter(d => VGlobal.contains(d._1)).flatMap { case (id, map) => map.toList.map(d => (d._2, 1L)) }.filter(_._1 > 0)
-      //并入T
       T = T.union(Ti)
     }
 
@@ -106,7 +96,7 @@ object DistributedShorestPath {
 
     val list: List[(Int, Double)] = TavgMap.toList
 
-    //计算平均最短路径
+    //Calculate the average shortest path.
     var num = 0d
     var len = 0d
     for (i <- list.indices) {
@@ -115,7 +105,7 @@ object DistributedShorestPath {
     }
     println("avgShortestPathLength", len/num)
 
-    //计算90%直径
+    //Calculate 90\%-effective diameter.
     val spList: ArrayBuffer[Int] = new ArrayBuffer[Int]()
     for (i <- list.indices) {
       val k = list(i)._2.toInt
