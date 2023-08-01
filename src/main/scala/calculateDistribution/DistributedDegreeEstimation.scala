@@ -13,7 +13,7 @@ object DistributedDegreeEstimation {
     val outputPath = args(1)
     val samplingRatio = args(2).toDouble
     val N = args(3).toLong
-    //Read data.
+    //Load data.
     val NRPs: List[String] = Util.getFiles(sc, filePath)
     //Sample NRPs.
     val NRPSample: List[String] = Util.sample(NRPs, samplingRatio)
