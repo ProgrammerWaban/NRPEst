@@ -57,7 +57,7 @@ object DistributedClusteringCoefficientEstimation {
     //Calculate the clustering coefficients.
     val cc: RDD[(Long, Double)] = counters.map {
       case (id, (tri, d)) =>
-        if (d >= 2) (id, 1.0 * tri / d / (d - 1)) //这里不用×2，因为tri（三角数量）已经是实际数量的2倍
+        if (d >= 2) (id, 1.0 * tri / d / (d - 1)) //There is not need to times 2, because the tri(number of triangles) is twice the actual number.
         else  (id, 0.0)
     }
     //Calculate the clustering coefficient distribution.
