@@ -2,20 +2,15 @@ package calculateDistribution
 
 import Utils.{GetStorageLevel, Util}
 import org.apache.spark.SparkConf
-import org.apache.spark.graphx.lib.ShortestPaths
-import org.apache.spark.graphx.lib.ShortestPaths.SPMap
 import org.apache.spark.graphx.{Edge, Graph, VertexId}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
-
-import scala.collection.mutable.ArrayBuffer
 
 object DistributedShorestPath {
   def main(args: Array[String]): Unit = {
     val sparkConf = new SparkConf().setAppName("DistributedShorestPath")
     val ss = new SparkSession.Builder().config(sparkConf).getOrCreate()
     val sc = ss.sparkContext
-    import ss.implicits._
 
     //Parameters.
     val filePath = args(0)
@@ -23,12 +18,16 @@ object DistributedShorestPath {
     val samplingRatio = args(2).toDouble
     val numPartitionsMultiplier = args(3).toInt
     val storageLevel = GetStorageLevel.getStorageLevel(args(4).toInt)
+    val iterNum = 3
+
+    val startTime = System.currentTimeMillis()
 
     //Sample NRPs.
     //Load data.
     val NRPs: List[String] = Util.getFiles(sc, filePath)
     val NRPSample: List[String] = Util.sample(NRPs, samplingRatio)
-    var T: RDD[(Int, Long)] = sc.emptyRDD
+
+    var T: RDD[(Int, Double)] = sc.emptyRDD
 
     //Compute shortest paths for subgraphs
     for (i <- NRPSample.indices) {
@@ -41,6 +40,7 @@ object DistributedShorestPath {
         val Vall = s(1).split(",").map(_.split("_")(0).toLong)
         Vall
       }).distinct().subtract(V)
+      val VneighborGlobal: Map[Long, Int] = Vneighbor.collect().map((_, 1)).toMap
       val E: RDD[(Long, Long)] = A.flatMap(line => {
         val s = line.split(":")
         val node = s(0).toLong
@@ -52,11 +52,10 @@ object DistributedShorestPath {
         val block: RDD[String] = Util.findVaddData(ss, Vneighbor, filePath, VPath)
         val blockData: RDD[(Long, String)] = block.map(line => (line.split(":")(0).toLong, line.split(":")(1)))
         val VneighborList: RDD[(Long, String)] = Vneighbor.map((_, 2)).leftOuterJoin(blockData).map(d => (d._1, d._2._2.head))
-        val VneighborGlobal: Array[Long] = Vneighbor.collect()
         val Eneighbor: RDD[(Long, Long)] = VneighborList.flatMap {
           case (node, str) =>
             val nList = str.split(",").map(_.split("_")(0).toLong)
-            val n = nList.filter(VneighborGlobal.contains(_))
+            val n = nList.filter(VneighborGlobal.contains)
             n.map(d => (Math.min(node, d), Math.max(node, d)))
         }.distinct()
         val EneighborList: RDD[(Long, Long, String, String)] = Eneighbor.leftOuterJoin(blockData)
@@ -77,49 +76,60 @@ object DistributedShorestPath {
       val newE = E.union(VneighborEdges).flatMap(d => Array(new Edge(d._1, d._2, None), new Edge(d._2, d._1, None)))
       val newERDD = newE.repartition(newE.getNumPartitions * numPartitionsMultiplier)
       val graph: Graph[Int, None.type] = Graph.apply(newVRDD, newERDD, 1, storageLevel, storageLevel)
-      //Find the largest connected component
-      val ccGraph: Graph[VertexId, None.type] = graph.connectedComponents()
-      val largestComponent: (Int, VertexId) = ccGraph.vertices.map(v => (v._2, 1)).reduceByKey(_ + _).map(_.swap).max()
-      val largeCCGraph: Graph[VertexId, None.type] = ccGraph.subgraph(vpred = (v, d) => d == largestComponent._2)
-      val ccVGlobal: Array[VertexId] = largeCCGraph.vertices.filter(v => VGlobal.contains(v._1)).map(_._1).collect()
-      //Calculate the shortest path。
-      val sp: Graph[SPMap, None.type] = ShortestPaths.run(largeCCGraph, ccVGlobal)
-      val Ti: RDD[(Int, Long)] = sp.vertices.filter(d => VGlobal.contains(d._1)).flatMap { case (id, map) => map.toList.map(d => (d._2, 1L)) }.filter(_._1 > 0)
-      T = T.union(Ti)
+      //Calculate the number of vertex pairs of path length 1, 2, 3
+      var newGraph: Graph[Map[VertexId, Int], None.type] = graph.mapVertices((vid, n) => {
+        if (VGlobal.contains(vid)) {
+          Map[VertexId, Int](vid -> 0)
+        } else {
+          Map[VertexId, Int]()
+        }
+      })
+      newGraph = newGraph.pregel(Map[VertexId, Int](), iterNum)(
+        (vid, attr, msg) => {
+          val keySet = attr.keySet ++ msg.keySet
+          keySet.map(key => {
+            val value = Math.min(attr.getOrElse(key, Int.MaxValue - 10), msg.getOrElse(key, Int.MaxValue - 10) + 1)
+            key -> value
+          }).toMap
+        },
+        triplet => {
+          if (triplet.srcAttr.nonEmpty && triplet.dstAttr.nonEmpty) {
+            Iterator((triplet.srcId, triplet.dstAttr), (triplet.dstId, triplet.srcAttr))
+          } else if (triplet.srcAttr.isEmpty && triplet.dstAttr.nonEmpty) {
+            Iterator((triplet.srcId, triplet.dstAttr))
+          } else if (triplet.srcAttr.nonEmpty && triplet.dstAttr.isEmpty) {
+            Iterator((triplet.dstId, triplet.srcAttr))
+          } else {
+            Iterator()
+          }
+        },
+        (m1, m2) => {
+          val keySet = m1.keySet ++ m2.keySet
+          keySet.map(key => {
+            val value = Math.min(m1.getOrElse(key, Int.MaxValue - 10), m2.getOrElse(key, Int.MaxValue - 10))
+            key -> value
+          }).toMap
+        }
+      )
+      val pathLen: RDD[(Int, Long)] = newGraph.vertices.filter(d => VGlobal.contains(d._1)).flatMap {
+        case (id, m) =>
+          m.toList.map(d => (d._2, 1L))
+      }.reduceByKey(_ + _)
+      //Calculate the number of total vertex pairs
+      val sumPairs = VGlobal.length.toDouble * (VGlobal.length.toDouble - 1) / 2
+
+      val pathLenPercent: RDD[(Int, Double)] = pathLen.map(d => (d._1, d._2.toDouble / 2 / sumPairs))
+      T = T.union(pathLenPercent)
     }
 
+    val outcome: RDD[(Int, Double)] = T.filter(_._1 != 0).reduceByKey(_ + _).mapValues(_ / NRPSample.length)
 
-    val Tavg: RDD[(Int, Double)] = T.reduceByKey(_ + _).mapValues(_.toDouble / NRPSample.length)
+    outcome.collect().sortBy(_._1).foreach(println)
 
-    val TavgMap: Map[Int, Double] = Tavg.collect().toMap
-    println("TavgMap", TavgMap)
+    val endTime = System.currentTimeMillis()
 
-    val list: List[(Int, Double)] = TavgMap.toList
-
-    //Calculate the average shortest path.
-    var num = 0d
-    var len = 0d
-    for (i <- list.indices) {
-      num = num + list(i)._2
-      len = len + list(i)._1 * list(i)._2
-    }
-    println("avgShortestPathLength", len/num)
-
-    //Calculate 90\%-effective diameter.
-    val spList: ArrayBuffer[Int] = new ArrayBuffer[Int]()
-    for (i <- list.indices) {
-      val k = list(i)._2.toInt
-      for (j <- 0 until k) {
-        spList.append(list(i)._1)
-      }
-    }
-    val sorted: ArrayBuffer[Int] = spList.sorted
-    val position = (0.9 * sorted.length).toInt - 1
-    if (sorted.isEmpty || position < 0) {
-      println("90%Diameter", 0)
-    } else {
-      println("90%Diameter", sorted(position))
-    }
+    val totalTime = (endTime - startTime) / 1000
+    println("time", totalTime)
 
     ss.stop()
   }
