@@ -18,7 +18,7 @@ object DistributedShorestPath {
     val samplingRatio = args(2).toDouble
     val numPartitionsMultiplier = args(3).toInt
     val storageLevel = GetStorageLevel.getStorageLevel(args(4).toInt)
-    val iterNum = 3
+    val iterNum = 5
 
     val startTime = System.currentTimeMillis()
 
